@@ -1,0 +1,42 @@
+import { _electron as electron, expect } from '@playwright/test';
+import { mkdtemp, mkdir, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+const profile = await mkdtemp(path.join(tmpdir(), 'asl-studio-test-'));
+const app = await electron.launch({ args: ['.', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'], env: { ...process.env, ASL_TEST_PROFILE: profile } });
+try {
+  const window = await app.firstWindow();
+  const errors = [];
+  window.on('pageerror', error => errors.push(error.message));
+  window.on('console', message => { if (message.type() === 'error') console.log('Renderer:', message.text()); });
+  await expect(window.getByRole('heading', { name: 'Tracking studio.' })).toBeVisible();
+  await window.getByRole('button', { name: 'Start camera', exact: true }).click();
+  await expect(window.locator('.engine-status')).toContainText('Tracking enabled', { timeout: 45000 });
+  await expect(window.getByText('Camera live', { exact: true })).toBeVisible();
+  await window.getByRole('button', { name: 'Stop', exact: true }).click();
+  const base64 = (await readFile('tests/fixtures/hands.jpg')).toString('base64');
+  await window.evaluate(async base64 => {
+    const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(base64), c => c.charCodeAt(0))], { type: 'image/jpeg' }));
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width; canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0); bitmap.close();
+    window.__fixture = canvas;
+    navigator.mediaDevices.getUserMedia = async () => canvas.captureStream(15);
+    setInterval(() => canvas.getContext('2d').fillRect(0,0,1,1), 65);
+  }, base64);
+  await window.getByRole('button', { name: 'Start camera', exact: true }).click();
+  await expect(window.locator('.hand-slot.detected').first()).toBeVisible({ timeout: 45000 });
+  await window.getByLabel('Sample label', { exact: true }).fill('Desktop test');
+  await window.getByRole('button', { name: 'Start recording', exact: true }).click();
+  await expect(window.getByRole('button', { name: /Save recording · 1\./ })).toBeVisible();
+  await window.getByRole('button', { name: /Save recording/ }).click();
+  await expect(window.getByRole('status')).toContainText('Saved');
+  await mkdir('test-results', { recursive: true });
+  await window.screenshot({ path: 'test-results/desktop-live.png' });
+  await window.getByRole('button', { name: 'Stop', exact: true }).click();
+  await window.reload();
+  await window.getByRole('button', { name: /My library/ }).click();
+  await expect(window.getByRole('button', { name: /Desktop test.*frames/ })).toBeVisible();
+  if (errors.length) throw new Error(errors.join('\n'));
+  console.log('Desktop PASS: sandboxed app, camera permission, local worker/model, real landmarks, sample storage, reload persistence.');
+} finally { await app.close(); }

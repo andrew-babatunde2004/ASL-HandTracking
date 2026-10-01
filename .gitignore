@@ -1,0 +1,10 @@
+node_modules/
+dist/
+public/vendor/
+public/models/*.task
+public/models/*.tmp
+*.tsbuildinfo
+playwright-report/
+test-results/
+.DS_Store
+release/
